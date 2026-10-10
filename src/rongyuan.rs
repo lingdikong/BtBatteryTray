@@ -46,7 +46,8 @@ pub struct VendorBattery {
     pub product: String,
     /// 设备树上能找到的蓝牙地址（12 位大写十六进制），用来和系统蓝牙设备列表对应
     pub parent_ids: Vec<String>,
-    pub level: u8,
+    /// None：通道存在但键盘没应答（休眠、刚连上还没就绪等）
+    pub level: Option<u8>,
     pub charging: bool,
 }
 
@@ -56,27 +57,28 @@ impl VendorBattery {
     }
 }
 
-/// 查询所有荣源方案蓝牙设备的电量
+/// 查询所有荣源方案蓝牙设备的电量（查询失败的设备也返回，level 为 None）
 pub fn query_all() -> Vec<VendorBattery> {
     vendor_interfaces()
         .into_iter()
-        .filter_map(|(path, parent_ids)| query(&path, parent_ids))
+        .map(|(path, parent_ids)| query(&path, parent_ids))
         .collect()
 }
 
-fn query(path: &[u16], parent_ids: Vec<String>) -> Option<VendorBattery> {
-    let dev = HidHandle::open(path, true)?;
-    let product = dev.product().unwrap_or_else(|| "RongYuan keyboard".into());
+fn query(path: &[u16], parent_ids: Vec<String>) -> VendorBattery {
+    let dev = HidHandle::open(path, true);
+    let product = dev.as_ref().and_then(HidHandle::product).unwrap_or_else(|| "RongYuan keyboard".into());
     // 键盘刚唤醒或忙时偶尔不应答，再试一次
-    let resp = dev
-        .transact(CMD_GET_BATTERY, Duration::from_millis(800))
-        .or_else(|| dev.transact(CMD_GET_BATTERY, Duration::from_millis(1500)))?;
-    Some(VendorBattery {
+    let resp = dev.as_ref().and_then(|d| {
+        d.transact(CMD_GET_BATTERY, Duration::from_millis(800))
+            .or_else(|| d.transact(CMD_GET_BATTERY, Duration::from_millis(1500)))
+    });
+    VendorBattery {
         product,
         parent_ids,
-        level: resp[3].min(100),
-        charging: resp[4] == 1,
-    })
+        level: resp.map(|r| r[3].min(100)),
+        charging: resp.is_some_and(|r| r[4] == 1),
+    }
 }
 
 /// 找出所有符合荣源厂商集合特征的 HID 接口，返回 (设备路径, 父节点实例 ID 链)

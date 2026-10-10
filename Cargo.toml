@@ -1,6 +1,6 @@
 [package]
 name = "bt-battery-tray"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2024"
 description = "蓝牙设备电量托盘"
 
@@ -10,7 +10,7 @@ strip = true
 
 [dependencies]
 tray-icon = "0.26.1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security", "Devices_Bluetooth", "Devices_Enumeration", "Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [build-dependencies]
 winresource = "0.1.31"

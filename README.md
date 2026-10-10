@@ -30,9 +30,10 @@ Windows 托盘小工具，显示所有已连接蓝牙设备的电量。每台能
 cargo build --release
 target/release/bt-battery-tray.exe            # 启动托盘
 target/release/bt-battery-tray.exe --print | cat   # 打印一次电量后退出（诊断用）
+target/release/bt-battery-tray.exe --watch | cat   # 打印 30 秒内的蓝牙连接事件（诊断用）
 ```
 
-左键单击图标立即刷新；右键菜单：设备列表、立即刷新、开机自启（写入 `HKCU\...\Run`）、退出。默认每 10 分钟自动刷新一次。
+左键单击图标立即刷新；右键菜单：设备列表、立即刷新、开机自启（写入 `HKCU\...\Run`）、退出。蓝牙设备连上或断开时立即刷新（WinRT DeviceWatcher 监听经典蓝牙和 BLE 的连接状态）；此外每 10 分钟自动刷新一次，读不到电量时按 3 秒起的退避间隔重试。
 
 设备类型取自 `DEVPKEY_DeviceContainer_Category`（如 `Input.Keyboard`），取不到时退回蓝牙 Class of Device。图标颜色跟随任务栏深浅色主题。
 

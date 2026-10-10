@@ -2,6 +2,7 @@
 
 mod autostart;
 mod bluetooth;
+mod devwatch;
 mod icon;
 mod rongyuan;
 
@@ -19,13 +20,29 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
-const RETRY_DELAYS: [Duration; 5] = [
-    Duration::from_secs(15),
+const RETRY_DELAYS: [Duration; 9] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(3),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
     Duration::from_secs(30),
     Duration::from_secs(60),
     Duration::from_secs(120),
     Duration::from_secs(240),
 ];
+/// 设备刚连上时系统还在加载驱动 / 电量属性，稍等再读
+const SETTLE_DELAY: Duration = Duration::from_millis(1500);
+/// 有用户输入时重试灰色设备的最小间隔
+const INPUT_RETRY_INTERVAL: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy)]
+enum Trigger {
+    /// 用户点击刷新
+    Manual,
+    /// 蓝牙设备连接或断开
+    DeviceChanged,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct Entry {
@@ -35,6 +52,8 @@ struct Entry {
     kind: DeviceKind,
     level: Option<u8>,
     charging: bool,
+    /// 有荣源私有通道：没读到电量多半是键盘休眠 / 未就绪，值得重试
+    has_vendor_channel: bool,
 }
 
 impl Entry {
@@ -65,28 +84,35 @@ fn collect() -> Vec<Entry> {
                 && let Some(i) = vendor.iter().position(|v| v.matches_address(&d.address))
             {
                 used[i] = true;
-                return Entry { key: d.address, name: d.name, kind: d.kind, level: Some(vendor[i].level), charging: vendor[i].charging };
+                return Entry {
+                    key: d.address,
+                    name: d.name,
+                    kind: d.kind,
+                    level: vendor[i].level,
+                    charging: vendor[i].charging,
+                    has_vendor_channel: true,
+                };
             }
-            Entry { key: d.address, name: d.name, kind: d.kind, level: d.battery, charging: false }
+            Entry { key: d.address, name: d.name, kind: d.kind, level: d.battery, charging: false, has_vendor_channel: false }
         })
         .collect();
     // 理论上不会出现：厂商通道找得到但系统蓝牙列表里没有对应设备
-    for (v, _) in vendor.iter().zip(&used).filter(|(_, u)| !**u) {
+    for (v, _) in vendor.iter().zip(&used).filter(|(v, u)| !**u && v.level.is_some()) {
         // 荣源方案基本都是键盘
         entries.push(Entry {
             key: v.product.clone(),
             name: v.product.clone(),
             kind: DeviceKind::Keyboard,
-            level: Some(v.level),
+            level: v.level,
             charging: v.charging,
+            has_vendor_channel: true,
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     entries
 }
 
-fn spawn_worker(results: Sender<Vec<Entry>>) -> Sender<()> {
-    let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
+fn spawn_worker(results: Sender<Vec<Entry>>, trigger_rx: Receiver<Trigger>) {
     thread::spawn(move || {
         let mut retry = 0;
         loop {
@@ -105,14 +131,20 @@ fn spawn_worker(results: Sender<Vec<Entry>>) -> Sender<()> {
                 return;
             }
             match trigger_rx.recv_timeout(wait) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(trigger) => {
+                    // 新的事件：重新开始快速重试
+                    retry = 0;
+                    if matches!(trigger, Trigger::DeviceChanged) {
+                        thread::sleep(SETTLE_DELAY);
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             // 合并连续的刷新请求
             while trigger_rx.try_recv().is_ok() {}
         }
     });
-    trigger_tx
 }
 
 struct App {
@@ -127,6 +159,8 @@ struct App {
     placeholder: Option<TrayIcon>,
     entries: Option<Vec<Entry>>,
     light_theme: bool,
+    /// 本次运行中读到过电量的设备
+    seen_battery: std::collections::HashSet<String>,
 }
 
 /// 任务栏是否为浅色主题（HKCU\...\Themes\Personalize\SystemUsesLightTheme）
@@ -174,6 +208,7 @@ impl App {
             placeholder: None,
             entries: None,
             light_theme: system_uses_light_theme(),
+            seen_battery: Default::default(),
         };
         app.placeholder = Some(app.build_icon(None, false, DeviceKind::Other, "蓝牙电量：正在读取…")?);
         Ok(app)
@@ -203,6 +238,7 @@ impl App {
         }
         self.light_theme = light_theme;
         self.update_menu(&entries);
+        self.seen_battery.extend(entries.iter().filter(|e| e.level.is_some()).map(|e| e.key.clone()));
 
         // 断开的设备移除图标（TrayIcon drop 时自动从托盘删除）
         self.icons.retain(|(key, _)| entries.iter().any(|e| &e.key == key));
@@ -232,6 +268,15 @@ impl App {
         self.entries = Some(entries);
     }
 
+    /// 是否有“本应能读到电量”却显示灰色的设备
+    fn has_retryable_gray(&self) -> bool {
+        self.entries.as_ref().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|e| e.level.is_none() && (e.has_vendor_channel || self.seen_battery.contains(&e.key)))
+        })
+    }
+
     fn update_menu(&mut self, entries: &[Entry]) {
         for item in self.device_items.drain(..) {
             let _ = self.menu.remove(&item);
@@ -250,11 +295,30 @@ impl App {
     }
 }
 
+/// 系统最后一次键鼠输入的时间戳（GetLastInputInfo），只读系统计数，不访问设备
+fn last_input_tick() -> u32 {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    let _ = unsafe { GetLastInputInfo(&mut info) };
+    info.dwTime
+}
+
 fn main() {
     // 诊断用：打印一次电量后退出（输出需重定向，如 `bt-battery-tray --print > out.txt`）
     if std::env::args().any(|a| a == "--print") {
         for e in collect() {
             println!("{}\t{:?}\t{}", e.name, e.kind, e.status());
+        }
+        return;
+    }
+
+    // 诊断用：打印 30 秒内收到的蓝牙连接事件（启动时会把已连接设备各报一次）
+    if std::env::args().any(|a| a == "--watch") {
+        let (tx, rx) = mpsc::channel::<Trigger>();
+        let _watcher = devwatch::ConnectionWatcher::start(tx, Trigger::DeviceChanged);
+        let start = std::time::Instant::now();
+        while rx.recv_timeout(Duration::from_secs(30).saturating_sub(start.elapsed())).is_ok() {
+            println!("{:>6.1}s 蓝牙连接状态变化", start.elapsed().as_secs_f32());
         }
         return;
     }
@@ -267,9 +331,14 @@ fn main() {
         }
     };
     let (results_tx, results_rx): (Sender<Vec<Entry>>, Receiver<Vec<Entry>>) = mpsc::channel();
-    let trigger = spawn_worker(results_tx);
+    let (trigger, trigger_rx) = mpsc::channel::<Trigger>();
+    spawn_worker(results_tx, trigger_rx);
+    // 蓝牙设备连上 / 断开时立即刷新；监听失败也不影响定时刷新
+    let _watcher = devwatch::ConnectionWatcher::start(trigger.clone(), Trigger::DeviceChanged).ok();
     let menu_events = MenuEvent::receiver();
     let tray_events = TrayIconEvent::receiver();
+    let mut last_input = last_input_tick();
+    let mut last_input_retry = std::time::Instant::now();
 
     loop {
         // 等待窗口消息，最多 200ms 后检查一次通道
@@ -289,7 +358,7 @@ fn main() {
             if event.id == app.quit.id() {
                 return;
             } else if event.id == app.refresh.id() {
-                let _ = trigger.send(());
+                let _ = trigger.send(Trigger::Manual);
             } else if event.id == app.autostart.id() {
                 let want = app.autostart.is_checked();
                 if !autostart::set_enabled(want) {
@@ -300,7 +369,17 @@ fn main() {
 
         while let Ok(event) = tray_events.try_recv() {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                let _ = trigger.send(());
+                let _ = trigger.send(Trigger::Manual);
+            }
+        }
+
+        // 键盘休眠时蓝牙不断开、也就没有连接事件；用户一开始打字 / 动鼠标，说明键盘醒了，立即重试灰色设备
+        let input = last_input_tick();
+        if input != last_input {
+            last_input = input;
+            if app.has_retryable_gray() && last_input_retry.elapsed() >= INPUT_RETRY_INTERVAL {
+                last_input_retry = std::time::Instant::now();
+                let _ = trigger.send(Trigger::Manual);
             }
         }
 
