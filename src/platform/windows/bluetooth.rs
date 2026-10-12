@@ -153,9 +153,14 @@ unsafe fn get_bool(set: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> O
 
 unsafe fn get_string(set: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<String> {
     let (_, v) = unsafe { get_raw(set, data, key) }?;
-    let wide: Vec<u16> = v.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let wide = utf16_units(&v);
     let s = String::from_utf16_lossy(&wide).trim_end_matches('\0').trim().to_string();
     (!s.is_empty()).then_some(s)
+}
+
+/// Little-endian UTF-16 code units of a raw property buffer (a trailing odd byte is ignored)
+fn utf16_units(bytes: &[u8]) -> Vec<u16> {
+    bytes.as_chunks::<2>().0.iter().map(|&pair| u16::from_le_bytes(pair)).collect()
 }
 
 unsafe fn get_u32(set: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<u32> {
@@ -170,6 +175,6 @@ unsafe fn get_string_list(set: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKE
     if ty != DEVPROP_TYPE_STRING_LIST {
         return None;
     }
-    let wide: Vec<u16> = v.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let wide = utf16_units(&v);
     Some(wide.split(|&c| c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect())
 }
