@@ -1,12 +1,14 @@
-// 把程序图标和版本信息嵌入 exe（资源管理器、安装包、任务管理器里显示）
+// Embed the app icon and version info into the exe (shown in Explorer, the installer and Task Manager).
+// A version resource holds one language, so it is English; FileDescription is also the sender name of notifications.
 fn main() {
     println!("cargo:rerun-if-changed=assets/app.ico");
+    println!("cargo:rerun-if-changed=locales");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/app.ico")
-            .set("ProductName", "蓝牙电量")
-            .set("FileDescription", "蓝牙设备电量托盘")
+            .set("ProductName", "Bluetooth Battery")
+            .set("FileDescription", "Bluetooth Battery")
             .set("LegalCopyright", "");
-        res.compile().expect("编译 Windows 资源失败");
+        res.compile().expect("failed to compile Windows resources");
     }
 }

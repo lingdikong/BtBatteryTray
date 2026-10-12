@@ -1,0 +1,3 @@
+# Give the logged-in user read/write access to hidraw nodes of RongYuan keyboards (VID 0x3151) to read their battery.
+# HID device names look like 0005:3151:4012.0003 (bus:VID:PID.index). uaccess must be applied before rule 73.
+KERNEL=="hidraw*", KERNELS=="*:3151:*", TAG+="uaccess"

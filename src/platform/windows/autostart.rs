@@ -1,4 +1,4 @@
-//! 通过 HKCU\...\Run 实现开机自启
+//! Launch at login via HKCU\...\Run
 
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
@@ -32,7 +32,7 @@ pub fn is_enabled() -> bool {
         return false;
     }
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    // 程序挪了位置后旧值视为未启用，重新勾选即可更新
+    // If the program has moved, the old value counts as disabled; re-checking the option updates it
     Some(String::from_utf16_lossy(&buf[..len])) == command_line()
 }
 

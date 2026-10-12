@@ -1,0 +1,5 @@
+# Linux / macOS packaging scripts and config files must use LF line endings
+*.sh text eol=lf
+*.rules text eol=lf
+*.desktop text eol=lf
+*.plist text eol=lf

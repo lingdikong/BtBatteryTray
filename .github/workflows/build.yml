@@ -1,0 +1,50 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          scripts/build-installer.ps1
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: sh scripts/build-macos.sh
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: sh scripts/build-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BtBatteryTray-${{ runner.os }}
+          path: |
+            target/installer/*.exe
+            target/dist/*.dmg
+            target/dist/*.tar.gz
+          if-no-files-found: error

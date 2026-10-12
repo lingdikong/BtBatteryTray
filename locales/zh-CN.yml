@@ -1,0 +1,20 @@
+# Simplified Chinese. Keys must match en.yml exactly (checked by `cargo test`).
+_version: 1
+
+app.name: "蓝牙电量"
+
+menu.refresh: "立即刷新"
+menu.autostart: "开机自启"
+menu.quit: "退出"
+menu.loading: "正在读取…"
+menu.no_devices: "没有已连接的蓝牙设备"
+
+status.charging: "%{level}% 充电中"
+status.unknown: "未读取到电量"
+
+tray.loading: "蓝牙电量：正在读取…"
+tray.no_devices: "蓝牙电量：没有已连接的设备"
+
+notify.low.title: "蓝牙设备电量低"
+notify.low.body: "%{name} 电量仅剩 %{level}%，请及时充电"
+notify.sample_device: "示例设备"

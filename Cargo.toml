@@ -2,15 +2,33 @@
 name = "bt-battery-tray"
 version = "0.1.5"
 edition = "2024"
-description = "蓝牙设备电量托盘"
+# let-chains (`if let ... && let ...`) need 1.88
+rust-version = "1.88"
+description = "Tray app showing the battery level of connected Bluetooth devices"
 
 [profile.release]
 lto = true
 strip = true
 
 [dependencies]
-tray-icon = "0.26.1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security", "Devices_Bluetooth", "Devices_Enumeration", "Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
+rust-i18n = "4"
+sys-locale = "0.3"
+# On Linux use the pure-Rust StatusNotifierItem backend: no GTK / libappindicator needed
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_Properties", "Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Security", "Devices_Bluetooth", "Devices_Enumeration", "Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+serde_json = "1"
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSString", "NSRunLoop", "NSUserDefaults", "NSObjCRuntime"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSRunningApplication"] }
 
 [build-dependencies]
 winresource = "0.1.31"

@@ -1,309 +1,137 @@
-//! 荣源 (RongYuan, VID 0x3151) 方案蓝牙键盘的私有电量协议。
+//! Private battery protocol of Bluetooth keyboards built on the RongYuan (VID 0x3151) platform.
 //!
-//! 腹灵 NX87、Akko、MonsGeek、Epomaker 等大量键盘用这套固件。经典蓝牙/BLE 连接时，
-//! 键盘会暴露一个厂商 HID 集合（UsagePage 0xFF66 / 0xFF55，Usage 0x0202，Report ID 6），
-//! 收发 66 字节报告：
+//! Many keyboards (Feker NX87, Akko, MonsGeek, Epomaker, ...) run this firmware. Over Classic/BLE,
+//! the keyboard exposes a vendor HID collection (UsagePage 0xFF66 / 0xFF55, Usage 0x0202, Report ID 6)
+//! that sends and receives 66-byte reports:
 //!
 //! ```text
-//! 请求: [06] [55] [cmd] [d1..d6] [checksum] [0...]   checksum = 0xFF - (cmd+d1..d6)
-//! 应答: [06] [55] [cmd] [r1] [r2] ...
+//! Request:  [06] [55] [cmd] [d1..d6] [checksum] [0...]   checksum = 0xFF - (cmd+d1..d6)
+//! Response: [06] [55] [cmd] [r1] [r2] ...
 //! ```
 //!
-//! `GET_BATTERY (0x83)` 应答中 r1 = 电量百分比，r2 = 0 未充电 / 1 充电中 / 2 已充满。
-//! 协议参考 github.com/echtzeit-solutions/monsgeek-akko-linux 和官方驱动前端代码。
+//! In the `GET_BATTERY (0x83)` response, r1 = battery percentage, r2 = 0 not charging / 1 charging / 2 full.
+//! Protocol reference: github.com/echtzeit-solutions/monsgeek-akko-linux and the official driver's frontend code.
+//!
+//! Only the protocol lives here; finding devices and exchanging reports is done in `platform::*::hid`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Device_IDW, CM_Get_Parent, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
-    SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
-    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
-    SetupDiGetDeviceInterfaceDetailW,
-};
-use windows::Win32::Devices::HumanInterfaceDevice::{
-    HIDD_ATTRIBUTES, HIDP_CAPS, HidD_FreePreparsedData, HidD_GetAttributes, HidD_GetHidGuid,
-    HidD_GetPreparsedData, HidD_GetProductString, HidP_GetCaps, PHIDP_PREPARSED_DATA,
-};
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, WAIT_OBJECT_0};
-use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING, ReadFile, WriteFile,
-};
-use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-use windows::core::{PCWSTR, PWSTR};
+use crate::platform::hid;
 
-const VID_RONGYUAN: u16 = 0x3151;
-const VENDOR_USAGE_PAGES: [u16; 2] = [0xFF66, 0xFF55];
-const VENDOR_USAGE: u16 = 0x0202;
+pub const VID_RONGYUAN: u16 = 0x3151;
+pub const VENDOR_USAGE_PAGES: [u16; 2] = [0xFF66, 0xFF55];
+pub const VENDOR_USAGE: u16 = 0x0202;
+pub const REPORT_LEN: usize = 66;
 const REPORT_ID: u8 = 0x06;
 const CMD_MARKER: u8 = 0x55;
 const CMD_GET_BATTERY: u8 = 0x83;
-const REPORT_LEN: usize = 66;
 
 #[derive(Debug, Clone)]
 pub struct VendorBattery {
     pub product: String,
-    /// 设备树上能找到的蓝牙地址（12 位大写十六进制），用来和系统蓝牙设备列表对应
-    pub parent_ids: Vec<String>,
-    /// None：通道存在但键盘没应答（休眠、刚连上还没就绪等）
+    /// ID strings containing the Bluetooth address (12 uppercase hex digits), used to match the system's Bluetooth device list
+    pub ids: Vec<String>,
+    /// None: the channel exists but the keyboard didn't respond (asleep, just connected and not ready yet, etc.)
     pub level: Option<u8>,
     pub charging: bool,
 }
 
 impl VendorBattery {
     pub fn matches_address(&self, address: &str) -> bool {
-        self.parent_ids.iter().any(|id| id.contains(address))
+        self.ids.iter().any(|id| id.contains(address))
     }
 }
 
-/// 查询所有荣源方案蓝牙设备的电量（查询失败的设备也返回，level 为 None）
+/// Query the battery level of all RongYuan Bluetooth devices (devices whose query fails are returned too, with level None)
 pub fn query_all() -> Vec<VendorBattery> {
-    vendor_interfaces()
-        .into_iter()
-        .map(|(path, parent_ids)| query(&path, parent_ids))
-        .collect()
+    hid::vendor_interfaces().into_iter().map(query).collect()
 }
 
-fn query(path: &[u16], parent_ids: Vec<String>) -> VendorBattery {
-    let dev = HidHandle::open(path, true);
-    let product = dev.as_ref().and_then(HidHandle::product).unwrap_or_else(|| "RongYuan keyboard".into());
-    // 键盘刚唤醒或忙时偶尔不应答，再试一次
+fn query(iface: hid::VendorInterface) -> VendorBattery {
+    let dev = iface.open();
+    let req = request(CMD_GET_BATTERY);
+    let accept = |r: &[u8]| r.len() >= 5 && r[0] == REPORT_ID && r[1] == CMD_MARKER && r[2] == CMD_GET_BATTERY;
+    // The keyboard occasionally doesn't respond right after waking or while busy; try once more
     let resp = dev.as_ref().and_then(|d| {
-        d.transact(CMD_GET_BATTERY, Duration::from_millis(800))
-            .or_else(|| d.transact(CMD_GET_BATTERY, Duration::from_millis(1500)))
+        d.transact(&req, &accept, Duration::from_millis(800))
+            .or_else(|| d.transact(&req, &accept, Duration::from_millis(1500)))
     });
     VendorBattery {
-        product,
-        parent_ids,
+        product: iface.product.clone().unwrap_or_else(|| "RongYuan keyboard".into()),
+        ids: iface.ids.clone(),
         level: resp.map(|r| r[3].min(100)),
         charging: resp.is_some_and(|r| r[4] == 1),
     }
 }
 
-/// 找出所有符合荣源厂商集合特征的 HID 接口，返回 (设备路径, 父节点实例 ID 链)
-fn vendor_interfaces() -> Vec<(Vec<u16>, Vec<String>)> {
-    let mut out = Vec::new();
-    unsafe {
-        let guid = HidD_GetHidGuid();
-        let Ok(set) = SetupDiGetClassDevsW(Some(&guid), PCWSTR::null(), None, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE)
-        else {
-            return out;
-        };
-        let mut index = 0;
-        loop {
-            let mut iface = SP_DEVICE_INTERFACE_DATA {
-                cbSize: size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
-                ..Default::default()
-            };
-            if SetupDiEnumDeviceInterfaces(set, None, &guid, index, &mut iface).is_err() {
-                break;
-            }
-            index += 1;
-
-            let mut needed = 0u32;
-            let _ = SetupDiGetDeviceInterfaceDetailW(set, &iface, None, 0, Some(&mut needed), None);
-            if needed == 0 {
-                continue;
-            }
-            // 用 u64 对齐的缓冲区承载变长结构体
-            let mut buf = vec![0u64; (needed as usize).div_ceil(8)];
-            let detail = buf.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W;
-            (*detail).cbSize = size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>() as u32;
-            let mut devinfo = SP_DEVINFO_DATA {
-                cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
-                ..Default::default()
-            };
-            if SetupDiGetDeviceInterfaceDetailW(set, &iface, Some(detail), needed, None, Some(&mut devinfo)).is_err() {
-                continue;
-            }
-            let path_ptr = std::ptr::addr_of!((*detail).DevicePath) as *const u16;
-            let len = (0..).take_while(|&i| *path_ptr.add(i) != 0).count();
-            let mut path: Vec<u16> = std::slice::from_raw_parts(path_ptr, len).to_vec();
-            path.push(0);
-
-            if is_vendor_collection(&path) {
-                out.push((path, parent_chain(devinfo.DevInst)));
-            }
-        }
-        let _ = SetupDiDestroyDeviceInfoList(set);
-    }
-    out
+/// Request report for a command without parameters
+fn request(cmd: u8) -> [u8; REPORT_LEN] {
+    let mut req = [0u8; REPORT_LEN];
+    req[0] = REPORT_ID;
+    req[1] = CMD_MARKER;
+    req[2] = cmd;
+    req[9] = 0xFF - (req[2..9].iter().map(|&b| b as u32).sum::<u32>() & 0xFF) as u8;
+    req
 }
 
-fn is_vendor_collection(path: &[u16]) -> bool {
-    // 只取属性，不需要读写权限，不会打扰其他程序
-    let Some(dev) = HidHandle::open(path, false) else { return false };
-    unsafe {
-        let mut attrs = HIDD_ATTRIBUTES {
-            Size: size_of::<HIDD_ATTRIBUTES>() as u32,
-            ..Default::default()
-        };
-        if !HidD_GetAttributes(dev.0, &mut attrs) || attrs.VendorID != VID_RONGYUAN {
-            return false;
+/// Whether the HID report descriptor contains the RongYuan vendor collection (Linux / macOS get the whole device's descriptor, so we have to search it ourselves)
+#[cfg_attr(windows, allow(dead_code))]
+pub fn descriptor_has_vendor_collection(desc: &[u8]) -> bool {
+    let mut usage_page = 0u16;
+    let mut usages: Vec<u32> = Vec::new();
+    let mut i = 0;
+    while i < desc.len() {
+        let prefix = desc[i];
+        // Long item: 0xFE, data size, tag, data...
+        if prefix == 0xFE {
+            i += 3 + desc.get(i + 1).copied().unwrap_or(0) as usize;
+            continue;
         }
-        let mut pp = PHIDP_PREPARSED_DATA::default();
-        if !HidD_GetPreparsedData(dev.0, &mut pp) {
-            return false;
+        let size = [0, 1, 2, 4][(prefix & 0x03) as usize];
+        let Some(data) = desc.get(i + 1..i + 1 + size) else { break };
+        let value = data.iter().rev().fold(0u32, |v, &b| v << 8 | b as u32);
+        i += 1 + size;
+        match prefix & 0xFC {
+            // Usage Page (global)
+            0x04 => usage_page = value as u16,
+            // Usage (local); a 4-byte usage carries its own Usage Page in the high 16 bits
+            0x08 => usages.push(if size == 4 { value } else { (usage_page as u32) << 16 | value }),
+            // Collection
+            0xA0 => {
+                let hit = usages.last().is_some_and(|&u| {
+                    VENDOR_USAGE_PAGES.contains(&((u >> 16) as u16)) && u & 0xFFFF == VENDOR_USAGE as u32
+                });
+                if hit {
+                    return true;
+                }
+                usages.clear();
+            }
+            // Other Main items (Input / Output / Feature / End Collection) clear the local state
+            0x80 | 0x90 | 0xB0 | 0xC0 => usages.clear(),
+            _ => {}
         }
-        let mut caps = HIDP_CAPS::default();
-        let ok = HidP_GetCaps(pp, &mut caps).is_ok();
-        let _ = HidD_FreePreparsedData(pp);
-        ok && VENDOR_USAGE_PAGES.contains(&caps.UsagePage)
-            && caps.Usage == VENDOR_USAGE
-            && caps.OutputReportByteLength as usize == REPORT_LEN
     }
+    false
 }
 
-/// 向上取 3 层父节点的实例 ID（大写），蓝牙地址就藏在其中
-fn parent_chain(mut devinst: u32) -> Vec<String> {
-    let mut ids = Vec::new();
-    for _ in 0..3 {
-        let mut parent = 0u32;
-        if unsafe { CM_Get_Parent(&mut parent, devinst, 0) } != CR_SUCCESS {
-            break;
-        }
-        let mut buf = [0u16; 512];
-        if unsafe { CM_Get_Device_IDW(parent, &mut buf, 0) } == CR_SUCCESS {
-            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            ids.push(String::from_utf16_lossy(&buf[..len]).to_ascii_uppercase());
-        }
-        devinst = parent;
-    }
-    ids
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-struct HidHandle(HANDLE);
-
-impl HidHandle {
-    fn open(path: &[u16], rw: bool) -> Option<Self> {
-        let (access, flags) = if rw {
-            ((GENERIC_READ | GENERIC_WRITE).0, FILE_FLAG_OVERLAPPED)
-        } else {
-            (0, FILE_FLAGS_AND_ATTRIBUTES(0))
-        };
-        unsafe {
-            CreateFileW(
-                PCWSTR(path.as_ptr()),
-                access,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None,
-                OPEN_EXISTING,
-                flags,
-                None,
-            )
-        }
-        .ok()
-        .map(Self)
+    #[test]
+    fn checksum() {
+        let req = request(CMD_GET_BATTERY);
+        assert_eq!(&req[..10], &[0x06, 0x55, 0x83, 0, 0, 0, 0, 0, 0, 0x7C]);
     }
 
-    fn product(&self) -> Option<String> {
-        let mut buf = [0u16; 128];
-        let ok = unsafe { HidD_GetProductString(self.0, buf.as_mut_ptr().cast(), (buf.len() * 2) as u32) };
-        if !ok {
-            return None;
-        }
-        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        let s = String::from_utf16_lossy(&buf[..len]).trim().to_string();
-        (!s.is_empty()).then_some(s)
-    }
-
-    /// 发送一条无参数命令，等待回显同一命令字节的应答
-    fn transact(&self, cmd: u8, timeout: Duration) -> Option<[u8; REPORT_LEN]> {
-        let mut req = [0u8; REPORT_LEN];
-        req[0] = REPORT_ID;
-        req[1] = CMD_MARKER;
-        req[2] = cmd;
-        req[9] = 0xFF - (req[2..9].iter().map(|&b| b as u32).sum::<u32>() & 0xFF) as u8;
-
-        let event = unsafe { CreateEventW(None, true, false, PWSTR::null()) }.ok()?;
-        let _event_guard = HandleGuard(event);
-
-        // 先挂起读，避免应答在写完之前就到达而错过
-        let deadline = Instant::now() + timeout;
-        let mut resp = [0u8; REPORT_LEN];
-        let mut ov = OVERLAPPED { hEvent: event, ..Default::default() };
-        let mut pending = self.begin_read(&mut resp, &mut ov);
-        if !self.write(&req) {
-            self.cancel(&mut ov, pending);
-            return None;
-        }
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                self.cancel(&mut ov, pending);
-                return None;
-            }
-            if pending && unsafe { WaitForSingleObject(event, left.as_millis() as u32) } != WAIT_OBJECT_0 {
-                self.cancel(&mut ov, true);
-                return None;
-            }
-            let mut n = 0u32;
-            if unsafe { GetOverlappedResult(self.0, &ov, &mut n, false) }.is_err() {
-                return None;
-            }
-            if n as usize >= 5 && resp[0] == REPORT_ID && resp[1] == CMD_MARKER && resp[2] == cmd {
-                return Some(resp);
-            }
-            // 别的报告（比如事件 0x66 或其他程序的应答），继续等
-            ov = OVERLAPPED { hEvent: event, ..Default::default() };
-            pending = self.begin_read(&mut resp, &mut ov);
-        }
-    }
-
-    /// 返回 true 表示读操作仍在进行中
-    fn begin_read(&self, buf: &mut [u8], ov: &mut OVERLAPPED) -> bool {
-        match unsafe { ReadFile(self.0, Some(buf), None, Some(ov)) } {
-            Ok(()) => false,
-            Err(e) => e.code() == windows::Win32::Foundation::ERROR_IO_PENDING.to_hresult(),
-        }
-    }
-
-    fn write(&self, data: &[u8]) -> bool {
-        let event = match unsafe { CreateEventW(None, true, false, PWSTR::null()) } {
-            Ok(e) => HandleGuard(e),
-            Err(_) => return false,
-        };
-        let mut ov = OVERLAPPED { hEvent: event.0, ..Default::default() };
-        if let Err(e) = unsafe { WriteFile(self.0, Some(data), None, Some(&mut ov)) } {
-            if e.code() != windows::Win32::Foundation::ERROR_IO_PENDING.to_hresult() {
-                return false;
-            }
-            if unsafe { WaitForSingleObject(event.0, 1000) } != WAIT_OBJECT_0 {
-                self.cancel(&mut ov, true);
-                return false;
-            }
-        }
-        let mut n = 0u32;
-        unsafe { GetOverlappedResult(self.0, &ov, &mut n, false) }.is_ok()
-    }
-
-    fn cancel(&self, ov: &mut OVERLAPPED, pending: bool) {
-        if pending {
-            unsafe {
-                let _ = CancelIoEx(self.0, Some(ov));
-                let mut n = 0u32;
-                // 等取消真正完成，否则 OVERLAPPED / 缓冲区释放后内核还可能写入
-                let _ = GetOverlappedResult(self.0, ov, &mut n, true);
-            }
-        }
-    }
-}
-
-impl Drop for HidHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
-struct HandleGuard(HANDLE);
-
-impl Drop for HandleGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
+    #[test]
+    fn finds_vendor_collection() {
+        // Keyboard collection + vendor collection (Usage Page 0xFF66, Usage 0x0202)
+        let desc = [
+            0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0xC0, // Generic Desktop / Keyboard
+            0x06, 0x66, 0xFF, 0x0A, 0x02, 0x02, 0xA1, 0x01, 0x85, 0x06, 0xC0,
+        ];
+        assert!(descriptor_has_vendor_collection(&desc));
+        assert!(!descriptor_has_vendor_collection(&desc[..7]));
     }
 }

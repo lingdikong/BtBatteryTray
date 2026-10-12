@@ -1,7 +1,7 @@
-//! 监听蓝牙设备连接 / 断开，事件到达时通知刷新线程。
+//! Watches Bluetooth device connect / disconnect and notifies the refresh thread on events.
 //!
-//! 用 WinRT DeviceWatcher 观察“已连接的蓝牙设备”这个集合：设备连上时触发 Added，
-//! 断开时触发 Removed。经典蓝牙和 BLE 各需一个 watcher。
+//! Uses a WinRT DeviceWatcher on the "connected Bluetooth devices" set: Added fires when a device connects,
+//! Removed when it disconnects. Classic Bluetooth and BLE each need their own watcher.
 
 use std::sync::mpsc::Sender;
 
@@ -9,13 +9,13 @@ use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice, Bl
 use windows::Devices::Enumeration::{DeviceInformation, DeviceInformationUpdate, DeviceWatcher};
 use windows::Foundation::TypedEventHandler;
 
-/// 持有 watcher，drop 时停止监听
+/// Holds the watchers; stops watching on drop
 pub struct ConnectionWatcher {
     watchers: Vec<DeviceWatcher>,
 }
 
 impl ConnectionWatcher {
-    /// 每次连接状态变化向 `notify` 发送一份 `msg`（在系统线程池线程上发送）
+    /// Sends one `msg` to `notify` on each connection state change (sent from a system thread pool thread)
     pub fn start<T: Clone + Send + 'static>(notify: Sender<T>, msg: T) -> windows::core::Result<Self> {
         let selectors = [
             BluetoothDevice::GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus::Connected)?,
@@ -34,7 +34,7 @@ impl ConnectionWatcher {
                 let _ = tx.send(m.clone());
                 Ok(())
             }))?;
-            // DeviceWatcher 要求 Added / Removed / Updated 都有订阅才会报告变化，Updated 用不到，给个空处理
+            // DeviceWatcher only reports changes if Added / Removed / Updated are all subscribed; Updated is unused, so give it an empty handler
             watcher.Updated(&TypedEventHandler::<DeviceWatcher, DeviceInformationUpdate>::new(|_, _| Ok(())))?;
             watcher.Start()?;
             watchers.push(watcher);

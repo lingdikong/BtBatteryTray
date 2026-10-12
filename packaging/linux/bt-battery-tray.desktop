@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Bluetooth Battery
+Name[zh_CN]=蓝牙电量
+Comment=Bluetooth device battery tray
+Comment[zh_CN]=蓝牙设备电量托盘
+Exec=bt-battery-tray
+Icon=bt-battery-tray
+Terminal=false
+Categories=Utility;

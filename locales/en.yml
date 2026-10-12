@@ -1,0 +1,21 @@
+# Source language. Add new keys here first, then translate them in every other locale file.
+# Placeholders use %{name}; keep them unchanged in translations.
+_version: 1
+
+app.name: "Bluetooth Battery"
+
+menu.refresh: "Refresh now"
+menu.autostart: "Launch at login"
+menu.quit: "Quit"
+menu.loading: "Loading…"
+menu.no_devices: "No Bluetooth devices connected"
+
+status.charging: "%{level}% (charging)"
+status.unknown: "Battery level unavailable"
+
+tray.loading: "Bluetooth Battery: loading…"
+tray.no_devices: "Bluetooth Battery: no devices connected"
+
+notify.low.title: "Bluetooth battery low"
+notify.low.body: "%{name} is at %{level}%. Please charge it soon."
+notify.sample_device: "Sample device"

@@ -1,23 +1,23 @@
 #![windows_subsystem = "windows"]
 
-mod autostart;
 mod bluetooth;
-mod devwatch;
+mod i18n;
 mod icon;
+mod platform;
 mod rongyuan;
 
 use bluetooth::DeviceKind;
+use rust_i18n::t;
+use platform::{autostart, devwatch};
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, TranslateMessage,
-    WM_QUIT,
-};
+
+rust_i18n::i18n!("locales", fallback = "en");
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const RETRY_DELAYS: [Duration; 9] = [
@@ -31,45 +31,45 @@ const RETRY_DELAYS: [Duration; 9] = [
     Duration::from_secs(120),
     Duration::from_secs(240),
 ];
-/// 设备刚连上时系统还在加载驱动 / 电量属性，稍等再读
+/// Right after a device connects the system is still loading drivers / battery properties, so wait before reading
 const SETTLE_DELAY: Duration = Duration::from_millis(1500);
-/// 有用户输入时重试灰色设备的最小间隔
+/// Minimum interval between retries of grayed-out devices on user input
 const INPUT_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy)]
 enum Trigger {
-    /// 用户点击刷新
+    /// User clicked refresh
     Manual,
-    /// 蓝牙设备连接或断开
+    /// A Bluetooth device connected or disconnected
     DeviceChanged,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct Entry {
-    /// 蓝牙地址，用作托盘图标的身份
+    /// Bluetooth address, used as the tray icon's identity
     key: String,
     name: String,
     kind: DeviceKind,
     level: Option<u8>,
     charging: bool,
-    /// 有荣源私有通道：没读到电量多半是键盘休眠 / 未就绪，值得重试
+    /// Has a RongYuan private channel: a missing battery level usually means the keyboard is asleep / not ready, worth retrying
     has_vendor_channel: bool,
 }
 
 impl Entry {
     fn status(&self) -> String {
         match self.level {
-            Some(l) if self.charging => format!("{l}% 充电中"),
+            Some(l) if self.charging => t!("status.charging", level = l).into_owned(),
             Some(l) => format!("{l}%"),
-            None => "未读取到电量".into(),
+            None => t!("status.unknown").into_owned(),
         }
     }
 }
 
-/// 汇总系统蓝牙电量和厂商私有协议电量
+/// Merge battery levels from the system Bluetooth stack and from vendor private protocols
 fn collect() -> Vec<Entry> {
-    let devices = bluetooth::connected_devices();
-    // 只有存在系统读不到电量的设备时才去碰厂商通道
+    let devices = platform::bluetooth::connected_devices();
+    // Only touch vendor channels when some device has no battery level from the system
     let vendor = if devices.iter().any(|d| d.battery.is_none()) {
         rongyuan::query_all()
     } else {
@@ -80,8 +80,14 @@ fn collect() -> Vec<Entry> {
     let mut entries: Vec<Entry> = devices
         .into_iter()
         .map(|d| {
+            // Match by Bluetooth address first; fall back to matching by name where no address is available (e.g. macOS)
+            let matched = || {
+                vendor.iter().position(|v| v.matches_address(&d.address)).or_else(|| {
+                    vendor.iter().zip(&used).position(|(v, u)| !*u && v.product.eq_ignore_ascii_case(&d.name))
+                })
+            };
             if d.battery.is_none()
-                && let Some(i) = vendor.iter().position(|v| v.matches_address(&d.address))
+                && let Some(i) = matched()
             {
                 used[i] = true;
                 return Entry {
@@ -93,12 +99,19 @@ fn collect() -> Vec<Entry> {
                     has_vendor_channel: true,
                 };
             }
-            Entry { key: d.address, name: d.name, kind: d.kind, level: d.battery, charging: false, has_vendor_channel: false }
+            Entry {
+                key: d.address,
+                name: d.name,
+                kind: d.kind,
+                level: d.battery,
+                charging: d.charging,
+                has_vendor_channel: false,
+            }
         })
         .collect();
-    // 理论上不会出现：厂商通道找得到但系统蓝牙列表里没有对应设备
+    // Shouldn't happen in theory: a vendor channel is found but has no matching device in the system Bluetooth list
     for (v, _) in vendor.iter().zip(&used).filter(|(v, u)| !**u && v.level.is_some()) {
-        // 荣源方案基本都是键盘
+        // RongYuan devices are almost always keyboards
         entries.push(Entry {
             key: v.product.clone(),
             name: v.product.clone(),
@@ -117,7 +130,7 @@ fn spawn_worker(results: Sender<Vec<Entry>>, trigger_rx: Receiver<Trigger>) {
         let mut retry = 0;
         loop {
             let entries = collect();
-            // 有已连接设备没读到电量（开机蓝牙未就绪、键盘刚唤醒等）时，按退避间隔尽快重试
+            // If a connected device has no battery level (Bluetooth not ready at boot, keyboard just woke up, etc.), retry soon with backoff
             let wait = if entries.iter().any(|e| e.level.is_none()) && retry < RETRY_DELAYS.len() {
                 retry += 1;
                 RETRY_DELAYS[retry - 1]
@@ -132,7 +145,7 @@ fn spawn_worker(results: Sender<Vec<Entry>>, trigger_rx: Receiver<Trigger>) {
             }
             match trigger_rx.recv_timeout(wait) {
                 Ok(trigger) => {
-                    // 新的事件：重新开始快速重试
+                    // New event: restart the fast retries
                     retry = 0;
                     if matches!(trigger, Trigger::DeviceChanged) {
                         thread::sleep(SETTLE_DELAY);
@@ -141,7 +154,7 @@ fn spawn_worker(results: Sender<Vec<Entry>>, trigger_rx: Receiver<Trigger>) {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
-            // 合并连续的刷新请求
+            // Coalesce back-to-back refresh requests
             while trigger_rx.try_recv().is_ok() {}
         }
     });
@@ -153,43 +166,46 @@ struct App {
     refresh: MenuItem,
     autostart: CheckMenuItem,
     quit: MenuItem,
-    /// 每台已连接设备一个托盘图标（没读到电量的显示“未连接”样式），按 Entry::key 对应
+    /// One tray icon per connected device (shown in "disconnected" style when no battery level), keyed by Entry::key
     icons: Vec<(String, TrayIcon)>,
-    /// 没有任何已连接设备时的占位图标，保证菜单仍可打开
+    /// Placeholder icon when no device is connected, so the menu can still be opened
     placeholder: Option<TrayIcon>,
     entries: Option<Vec<Entry>>,
     light_theme: bool,
-    /// 本次运行中读到过电量的设备
+    /// Devices whose battery level has been read during this run
     seen_battery: std::collections::HashSet<String>,
+    /// Devices already shown a low-battery reminder that haven't been charged since
+    low_notified: std::collections::HashSet<String>,
 }
 
-/// 任务栏是否为浅色主题（HKCU\...\Themes\Personalize\SystemUsesLightTheme）
-fn system_uses_light_theme() -> bool {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-    use windows::core::w;
-    let mut value = 0u32;
-    let mut size = size_of::<u32>() as u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
-            w!("SystemUsesLightTheme"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&mut value as *mut u32).cast()),
-            Some(&mut size),
-        )
+/// Key used by the placeholder icon in icon_guid / the tray id
+const PLACEHOLDER_KEY: &str = "placeholder";
+
+/// Stable identity of a tray icon (only Windows uses the GUID; other platforms ignore it).
+///
+/// Without a GUID, Windows identifies icons by "exe path + creation index within the process", and the index changes with device connection order,
+/// so every new icon is treated as never seen before, hidden in the overflow area by default, and the user's "show on taskbar" setting isn't remembered.
+/// Deriving a fixed GUID from the device address makes the setting follow the device.
+/// For unsigned programs the system binds the GUID to the exe path; reusing it from another path fails to register (silently),
+/// so the exe path is hashed in too: different paths (debug build / installed build) get their own GUIDs.
+fn icon_guid(key: &str) -> u128 {
+    let exe = std::env::current_exe().map(|p| p.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // FNV-1a with two different seeds concatenated into 128 bits; not DefaultHasher, whose output isn't guaranteed stable across Rust versions
+    let fnv = |seed: u64| {
+        exe.bytes().chain([0]).chain(key.bytes()).fold(seed, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
     };
-    status.is_ok() && value == 1
+    let raw = (fnv(0xcbf2_9ce4_8422_2325) as u128) << 64 | fnv(0x6c62_272e_07bb_0142) as u128;
+    // Mark as an RFC 4122 v8 (custom) UUID
+    raw & !(0xf << 76) & !(0x3 << 62) | 0x8 << 76 | 0x2 << 62
 }
 
 impl App {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let menu = Menu::new();
-        let refresh = MenuItem::new("立即刷新", true, None);
-        let autostart = CheckMenuItem::new("开机自启", true, autostart::is_enabled(), None);
-        let quit = MenuItem::new("退出", true, None);
-        let loading = MenuItem::new("正在读取…", false, None);
+        let refresh = MenuItem::new(t!("menu.refresh"), true, None);
+        let autostart = CheckMenuItem::new(t!("menu.autostart"), true, autostart::is_enabled(), None);
+        let quit = MenuItem::new(t!("menu.quit"), true, None);
+        let loading = MenuItem::new(t!("menu.loading"), false, None);
         menu.append_items(&[
             &loading,
             &PredefinedMenuItem::separator(),
@@ -207,31 +223,42 @@ impl App {
             icons: Vec::new(),
             placeholder: None,
             entries: None,
-            light_theme: system_uses_light_theme(),
+            light_theme: platform::light_theme(),
             seen_battery: Default::default(),
+            low_notified: Default::default(),
         };
-        app.placeholder = Some(app.build_icon(None, false, DeviceKind::Other, "蓝牙电量：正在读取…")?);
+        app.placeholder = Some(app.build_icon(PLACEHOLDER_KEY, None, false, DeviceKind::Other, &t!("tray.loading"))?);
         Ok(app)
     }
 
     fn render(&self, level: Option<u8>, charging: bool, kind: DeviceKind) -> tray_icon::Icon {
-        icon::render(level, charging, kind, icon::Style { light_theme: self.light_theme })
+        icon::render(platform::ICON_SIZE, level, charging, kind, icon::Style { light_theme: self.light_theme })
     }
 
-    fn build_icon(&self, level: Option<u8>, charging: bool, kind: DeviceKind, tip: &str) -> tray_icon::Result<TrayIcon> {
+    fn build_icon(
+        &self,
+        key: &str,
+        level: Option<u8>,
+        charging: bool,
+        kind: DeviceKind,
+        tip: &str,
+    ) -> tray_icon::Result<TrayIcon> {
         TrayIconBuilder::new()
+            // Linux StatusNotifierItem remembers the icon's show / hide setting by id
+            .with_id(format!("bt-battery-{key}"))
+            .with_guid(icon_guid(key))
             .with_icon(self.render(level, charging, kind))
             .with_tooltip(tip)
             .with_menu(Box::new(self.menu.clone()))
-            // 左键用来刷新，菜单只在右键弹出
+            // Left click refreshes; the menu only opens on right click
             .with_menu_on_left_click(false)
             .build()
     }
 
     fn update(&mut self, entries: Vec<Entry>) {
-        // 主题切换后即使数据没变也要重画
-        let light_theme = system_uses_light_theme();
-        // 上次有图标创建失败时，即使数据没变也要重试
+        // Redraw after a theme change even if the data hasn't changed
+        let light_theme = platform::light_theme();
+        // If creating an icon failed last time, retry even if the data hasn't changed
         let all_icons_present = entries.len() == self.icons.len();
         if self.entries.as_ref() == Some(&entries) && self.light_theme == light_theme && all_icons_present {
             return;
@@ -240,35 +267,58 @@ impl App {
         self.update_menu(&entries);
         self.seen_battery.extend(entries.iter().filter(|e| e.level.is_some()).map(|e| e.key.clone()));
 
-        // 断开的设备移除图标（TrayIcon drop 时自动从托盘删除）
+        // Remove icons of disconnected devices (dropping a TrayIcon removes it from the tray)
         self.icons.retain(|(key, _)| entries.iter().any(|e| &e.key == key));
         for e in &entries {
-            // 托盘提示最长 127 个字符
+            // Tray tooltips are limited to 127 characters
             let tip: String = format!("{}\n{}", e.name, e.status()).chars().take(127).collect();
             if let Some((_, tray)) = self.icons.iter().find(|(key, _)| key == &e.key) {
                 let _ = tray.set_icon(Some(self.render(e.level, e.charging, e.kind)));
                 let _ = tray.set_tooltip(Some(tip));
-            } else if let Ok(tray) = self.build_icon(e.level, e.charging, e.kind, &tip) {
+            } else if let Ok(tray) = self.build_icon(&e.key, e.level, e.charging, e.kind, &tip) {
                 self.icons.push((e.key.clone(), tray));
             }
         }
 
         if self.icons.is_empty() {
-            let tip = "蓝牙电量：没有已连接的设备";
+            let tip = &*t!("tray.no_devices");
             match &self.placeholder {
                 Some(tray) => {
                     let _ = tray.set_icon(Some(self.render(None, false, DeviceKind::Other)));
                     let _ = tray.set_tooltip(Some(tip));
                 }
-                None => self.placeholder = self.build_icon(None, false, DeviceKind::Other, tip).ok(),
+                None => self.placeholder = self.build_icon(PLACEHOLDER_KEY, None, false, DeviceKind::Other, tip).ok(),
             }
         } else {
             self.placeholder = None;
         }
+        self.notify_low_battery(&entries);
         self.entries = Some(entries);
     }
 
-    /// 是否有“本应能读到电量”却显示灰色的设备
+    /// Remind once per device when the battery level drops to LOW_BATTERY or below (and not charging);
+    /// re-arm only after charging or rising more than 5 points above the threshold, to avoid repeated reminders when hovering near it
+    fn notify_low_battery(&mut self, entries: &[Entry]) {
+        for e in entries {
+            let Some(level) = e.level else { continue };
+            if e.charging || level > icon::LOW_BATTERY + 5 {
+                self.low_notified.remove(&e.key);
+                continue;
+            }
+            if level > icon::LOW_BATTERY || self.low_notified.contains(&e.key) {
+                continue;
+            }
+            if let Some((_, tray)) = self.icons.iter().find(|(key, _)| key == &e.key) {
+                let body = t!("notify.low.body", name = e.name, level = level);
+                // If it wasn't sent (e.g. Explorer is restarting), try again on the next refresh
+                if platform::notify(tray, icon_guid(&e.key), &t!("notify.low.title"), &body) {
+                    self.low_notified.insert(e.key.clone());
+                }
+            }
+        }
+    }
+
+    /// Whether any device "should have a readable battery level" but is grayed out
     fn has_retryable_gray(&self) -> bool {
         self.entries.as_ref().is_some_and(|entries| {
             entries
@@ -283,10 +333,10 @@ impl App {
         }
         let mut new_items: Vec<MenuItem> = entries
             .iter()
-            .map(|e| MenuItem::new(format!("{}\t{}", e.name, e.status()), false, None))
+            .map(|e| MenuItem::new(format!("{}{}{}", e.name, platform::MENU_SEPARATOR, e.status()), false, None))
             .collect();
         if new_items.is_empty() {
-            new_items.push(MenuItem::new("没有已连接的蓝牙设备", false, None));
+            new_items.push(MenuItem::new(t!("menu.no_devices"), false, None));
         }
         for (pos, item) in new_items.iter().enumerate() {
             let _ = self.menu.insert(item, pos);
@@ -295,16 +345,10 @@ impl App {
     }
 }
 
-/// 系统最后一次键鼠输入的时间戳（GetLastInputInfo），只读系统计数，不访问设备
-fn last_input_tick() -> u32 {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
-    let mut info = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
-    let _ = unsafe { GetLastInputInfo(&mut info) };
-    info.dwTime
-}
-
 fn main() {
-    // 诊断用：打印一次电量后退出（输出需重定向，如 `bt-battery-tray --print > out.txt`）
+    i18n::init();
+
+    // Diagnostics: print battery levels once and exit (redirect the output, e.g. `bt-battery-tray --print > out.txt`)
     if std::env::args().any(|a| a == "--print") {
         for e in collect() {
             println!("{}\t{:?}\t{}", e.name, e.kind, e.status());
@@ -312,46 +356,51 @@ fn main() {
         return;
     }
 
-    // 诊断用：打印 30 秒内收到的蓝牙连接事件（启动时会把已连接设备各报一次）
+    // Diagnostics: print Bluetooth connection events received within 30 seconds (each connected device is reported once at startup)
     if std::env::args().any(|a| a == "--watch") {
         let (tx, rx) = mpsc::channel::<Trigger>();
         let _watcher = devwatch::ConnectionWatcher::start(tx, Trigger::DeviceChanged);
         let start = std::time::Instant::now();
         while rx.recv_timeout(Duration::from_secs(30).saturating_sub(start.elapsed())).is_ok() {
-            println!("{:>6.1}s 蓝牙连接状态变化", start.elapsed().as_secs_f32());
+            println!("{:>6.1}s Bluetooth connection changed", start.elapsed().as_secs_f32());
         }
         return;
     }
 
+    platform::init();
     let mut app = match App::new() {
         Ok(app) => app,
         Err(e) => {
-            eprintln!("创建托盘图标失败: {e}");
+            eprintln!("failed to create tray icon: {e}");
             return;
         }
     };
+    // Diagnostics: show a sample low-battery reminder to check whether system notifications are blocked
+    if std::env::args().any(|a| a == "--notify-test") {
+        let sent = app.placeholder.as_ref().is_some_and(|tray| {
+            let body = t!("notify.low.body", name = t!("notify.sample_device"), level = 15);
+            platform::notify(tray, icon_guid(PLACEHOLDER_KEY), &t!("notify.low.title"), &body)
+        });
+        println!("{}", if sent { "notification sent" } else { "notification failed" });
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(8) && platform::pump_events(Duration::from_millis(200)) {}
+        return;
+    }
+
     let (results_tx, results_rx): (Sender<Vec<Entry>>, Receiver<Vec<Entry>>) = mpsc::channel();
     let (trigger, trigger_rx) = mpsc::channel::<Trigger>();
     spawn_worker(results_tx, trigger_rx);
-    // 蓝牙设备连上 / 断开时立即刷新；监听失败也不影响定时刷新
+    // Refresh immediately when a Bluetooth device connects / disconnects; if watching fails, periodic refresh still works
     let _watcher = devwatch::ConnectionWatcher::start(trigger.clone(), Trigger::DeviceChanged).ok();
     let menu_events = MenuEvent::receiver();
     let tray_events = TrayIconEvent::receiver();
-    let mut last_input = last_input_tick();
-    let mut last_input_retry = std::time::Instant::now();
+    let mut last_poll = Instant::now();
+    let mut last_input_retry = Instant::now();
 
     loop {
-        // 等待窗口消息，最多 200ms 后检查一次通道
-        unsafe { MsgWaitForMultipleObjects(None, false, 200, QS_ALLINPUT) };
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            if msg.message == WM_QUIT {
-                return;
-            }
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+        // Process tray events, checking the channels at least every 200ms
+        if !platform::pump_events(Duration::from_millis(200)) {
+            return;
         }
 
         while let Ok(event) = menu_events.try_recv() {
@@ -373,14 +422,13 @@ fn main() {
             }
         }
 
-        // 键盘休眠时蓝牙不断开、也就没有连接事件；用户一开始打字 / 动鼠标，说明键盘醒了，立即重试灰色设备
-        let input = last_input_tick();
-        if input != last_input {
-            last_input = input;
-            if app.has_retryable_gray() && last_input_retry.elapsed() >= INPUT_RETRY_INTERVAL {
-                last_input_retry = std::time::Instant::now();
-                let _ = trigger.send(Trigger::Manual);
-            }
+        // A sleeping keyboard stays connected, so there's no connection event; once the user types / moves the mouse the keyboard is awake, so retry grayed-out devices right away
+        // Platforms without idle time (Linux) rely only on connection events and timed retries
+        let input = platform::idle_time().is_some_and(|idle| idle < last_poll.elapsed());
+        last_poll = Instant::now();
+        if input && app.has_retryable_gray() && last_input_retry.elapsed() >= INPUT_RETRY_INTERVAL {
+            last_input_retry = Instant::now();
+            let _ = trigger.send(Trigger::Manual);
         }
 
         if let Some(entries) = results_rx.try_iter().last() {
