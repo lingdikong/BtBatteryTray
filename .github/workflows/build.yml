@@ -77,10 +77,15 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - run: ls -l dist
+      # Artifacts keep their paths below target/ (installer/*.exe, dist/*.dmg, ...); flatten them
+      - name: Collect packages
+        run: |
+          mkdir release
+          find dist -type f -exec mv {} release/ \;
+          ls -l release
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: release/*
           generate_release_notes: true
           fail_on_unmatched_files: true
