@@ -52,6 +52,7 @@ fn pixels(size: usize, level: Option<u8>, charging: bool, kind: DeviceKind, styl
             DeviceKind::Mouse => mouse,
             DeviceKind::Headphones => headphones,
             DeviceKind::Gamepad => gamepad,
+            DeviceKind::Phone => phone,
             DeviceKind::Other => bluetooth_rune,
         }
     };
@@ -209,6 +210,16 @@ fn gamepad(x: f32, y: f32) -> bool {
     !(dpad || buttons)
 }
 
+fn phone(x: f32, y: f32) -> bool {
+    if !round_rect(x, y, -4.8, -8.5, 4.8, 8.5, 2.2) {
+        return false;
+    }
+    // 镂空屏幕，屏幕顶部留一个灵动岛
+    let screen = round_rect(x, y, -2.9, -6.6, 2.9, 6.6, 0.8);
+    let island = round_rect(x, y, -1.7, -5.6, 1.7, -4.0, 0.7);
+    !screen || island
+}
+
 fn bluetooth_rune(x: f32, y: f32) -> bool {
     let pts = [(-4.5, -4.0), (4.0, 3.5), (0.0, 7.5), (0.0, -7.5), (4.0, -3.5), (-4.5, 4.0)];
     pts.windows(2).any(|w| near_segment(x, y, w[0], w[1], 1.0))
@@ -228,6 +239,7 @@ mod tests {
             ("mouse75", Some(75), false, DeviceKind::Mouse),
             ("hp15", Some(15), false, DeviceKind::Headphones),
             ("pad100", Some(100), false, DeviceKind::Gamepad),
+            ("phone46", Some(46), false, DeviceKind::Phone),
             ("other55", Some(55), false, DeviceKind::Other),
             ("none", None, false, DeviceKind::Other),
             ("kb_unknown", None, false, DeviceKind::Keyboard),
