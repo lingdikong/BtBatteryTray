@@ -148,9 +148,23 @@ xcrun stapler staple target/dist/BtBatteryTray-<version>-macos.dmg
 
    To uninstall, delete `~/.local/bin/bt-battery-tray`, `~/.local/share/applications/bt-battery-tray.desktop`, `~/.local/share/icons/hicolor/256x256/apps/bt-battery-tray.png` and, if installed, `/etc/udev/rules.d/70-bt-battery-tray.rules`.
 
-### CI builds
+### CI builds and releases
 
-`.github/workflows/build.yml` runs on pushes to `main`, on `v*` tags, on pull requests and manually. On Windows, macOS and Linux it runs clippy and the tests, then builds the package above; the packages are attached to the workflow run as Artifacts. To produce a release: bump `version` in `Cargo.toml`, commit, then `git tag v<version> && git push origin v<version>` and download the Artifacts from that run (the workflow does not create a GitHub Release).
+`.github/workflows/build.yml` runs on pushes to `main`, on `v*` tags, on pull requests and manually. On Windows, macOS and Linux it runs clippy and the tests, then builds the packages above.
+
+**Downloading a build:** open the repository's **Actions** tab, click a successful run, and download `BtBatteryTray-Windows` / `-macOS` / `-Linux` from the **Artifacts** section at the bottom of the page (sign-in required; each is a zip containing the package). Artifacts expire after 90 days, so use Releases for anything you hand out.
+
+**Publishing a release:** pushing a `v*` tag also publishes a GitHub Release with the packages of all three platforms and release notes generated from the commits:
+
+```sh
+# 1. Bump version in Cargo.toml (e.g. 0.1.6) and commit
+git commit -am "release: v0.1.6"
+# 2. Tag and push
+git tag v0.1.6
+git push origin main v0.1.6
+```
+
+The tag must match `version` in `Cargo.toml` (`v0.1.6` ↔ `0.1.6`); otherwise the run fails before building, so the release can't ship packages with the wrong version. If a release run fails, fix the problem, delete the tag (`git tag -d v0.1.6 && git push origin :refs/tags/v0.1.6`) and tag again.
 
 ### Packaging files
 

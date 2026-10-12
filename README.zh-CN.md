@@ -148,9 +148,23 @@ xcrun stapler staple target/dist/BtBatteryTray-<版本>-macos.dmg
 
    卸载时删除 `~/.local/bin/bt-battery-tray`、`~/.local/share/applications/bt-battery-tray.desktop`、`~/.local/share/icons/hicolor/256x256/apps/bt-battery-tray.png`，装过 udev 规则的再删 `/etc/udev/rules.d/70-bt-battery-tray.rules`。
 
-### CI 自动打包
+### CI 自动打包和发布
 
-`.github/workflows/build.yml` 在推送到 `main`、推送 `v*` 标签、提交 PR 以及手动触发时运行：在 Windows、macOS、Linux 上跑 clippy 和测试，再按上面的方式打包，安装包挂在这次运行的 Artifacts 里。发布流程：改 `Cargo.toml` 的 `version` 并提交，然后 `git tag v<版本> && git push origin v<版本>`，到这次运行里下载 Artifacts（工作流不会自动创建 GitHub Release）。
+`.github/workflows/build.yml` 在推送到 `main`、推送 `v*` 标签、提交 PR 以及手动触发时运行：在 Windows、macOS、Linux 上跑 clippy 和测试，再按上面的方式打包。
+
+**下载构建产物**：打开仓库的 **Actions** 标签，点进一次成功的运行，在页面底部 **Artifacts** 区域下载 `BtBatteryTray-Windows` / `-macOS` / `-Linux`（需要登录，下载的是包含安装包的 zip）。Artifacts 90 天后过期，要发给别人请用 Release。
+
+**发布 Release**：推送 `v*` 标签时，还会自动创建 GitHub Release，附上三个平台的安装包，并按提交记录生成更新说明：
+
+```sh
+# 1. 改 Cargo.toml 的 version（如 0.1.6）并提交
+git commit -am "release: v0.1.6"
+# 2. 打标签并推送
+git tag v0.1.6
+git push origin main v0.1.6
+```
+
+标签必须和 `Cargo.toml` 的 `version` 一致（`v0.1.6` 对应 `0.1.6`），否则构建前就会失败，避免发布出版本号不对的安装包。发布失败时，修好问题后删掉标签（`git tag -d v0.1.6 && git push origin :refs/tags/v0.1.6`）再重新打。
 
 ### 打包相关文件
 
