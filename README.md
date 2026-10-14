@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A tray / menu bar app that shows the battery level of every connected Bluetooth device, on Windows, macOS and Linux. Each connected device gets its own tray icon, styled after the iPhone battery widget: the outer ring shows the battery level, and the center shows a lightning bolt while charging or the device type otherwise (keyboard / mouse / headphones / gamepad / phone / other). A dashed ring means the level could not be read. Hover for the device name and percentage.
+A tray / menu bar app that shows the battery level of every connected Bluetooth device, on Windows, macOS and Linux. Each connected device gets its own tray icon, styled after the iPhone battery widget: the outer ring shows the battery level, and the center shows a lightning bolt while charging or the device type otherwise (keyboard / mouse / headphones / earbuds / charging case / gamepad / phone / other). On macOS, AirPods and their charging case are listed as two devices, as System Settings does. A dashed ring means the level could not be read. Hover for the device name and percentage.
 
 No vendor drivers or background services needed; it is a single executable.
 
@@ -12,7 +12,7 @@ No vendor drivers or background services needed; it is a single executable.
 |---|---|---|
 | Windows | Device property `DEVPKEY_Bluetooth_Battery` (BLE Battery Service, HFP headsets); dual-mode devices such as iPhones use the BLE node with the same ContainerId | WinRT DeviceWatcher |
 | Linux | BlueZ `org.bluez.Battery1`; otherwise the kernel's `/sys/class/power_supply` (Logitech HID++ etc., which also reports charging) | BlueZ D-Bus signals |
-| macOS | `system_profiler SPBluetoothDataType` (Apple devices, AirPods, most BLE devices); otherwise the IORegistry `BatteryPercent` property (e.g. Logitech mice) | IOHIDManager (Bluetooth HID devices only; AirPods rely on periodic refresh) |
+| macOS | `system_profiler SPBluetoothDataType` (Apple devices, AirPods); otherwise the accessory power sources macOS publishes for System Settings / Control Center (`pmset -g accps`, e.g. Logitech mice and third-party keyboards), and then the IORegistry `BatteryPercent` property (pre-macOS 15) | IOHIDManager (Bluetooth HID devices only; AirPods rely on periodic refresh) |
 
 Keyboards built on the RongYuan platform (VID `0x3151`, e.g. Feker NX87, Akko, MonsGeek, Epomaker...) don't report their battery to the OS. The app reads it over the vendor HID channel with the read-only command `GET_BATTERY (0x83)`, on all three platforms. The vendor protocol is only tried for devices the OS has no battery level for.
 

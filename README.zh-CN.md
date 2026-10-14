@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-托盘 / 菜单栏小工具，显示所有已连接蓝牙设备的电量，支持 Windows、macOS、Linux。每台已连接设备各占一个托盘图标（仿 iPhone 电池小组件）：外圈圆环表示电量，圈内充电时显示闪电，否则显示设备类型（键盘 / 鼠标 / 耳机 / 手柄 / 手机 / 其他）；读不到电量时显示虚线圈。悬停显示设备名和百分比。
+托盘 / 菜单栏小工具，显示所有已连接蓝牙设备的电量，支持 Windows、macOS、Linux。每台已连接设备各占一个托盘图标（仿 iPhone 电池小组件）：外圈圆环表示电量，圈内充电时显示闪电，否则显示设备类型（键盘 / 鼠标 / 头戴耳机 / 耳塞 / 充电盒 / 手柄 / 手机 / 其他）；读不到电量时显示虚线圈。macOS 上 AirPods 和充电盒各算一台设备，和系统设置里一致。悬停显示设备名和百分比。
 
 不依赖任何厂商驱动或后台程序，单个可执行文件直接运行。
 
@@ -12,7 +12,7 @@
 |---|---|---|
 | Windows | 设备属性 `DEVPKEY_Bluetooth_Battery`（BLE 电池服务、HFP 耳机）；iPhone 等双模设备从同一 ContainerId 的 BLE 节点取 | WinRT DeviceWatcher |
 | Linux | BlueZ `org.bluez.Battery1`；没有时用内核 `/sys/class/power_supply`（Logitech HID++ 等，还能拿到充电状态） | BlueZ D-Bus 信号 |
-| macOS | `system_profiler SPBluetoothDataType`（Apple 设备、AirPods、多数 BLE 设备）；没有时读 IORegistry 的 `BatteryPercent` 属性（如罗技鼠标） | IOHIDManager（只覆盖蓝牙 HID 设备，AirPods 靠定时刷新） |
+| macOS | `system_profiler SPBluetoothDataType`（Apple 设备、AirPods）；没有时读系统设置 / 控制中心所用的配件电源（`pmset -g accps`，如罗技鼠标、第三方键盘），再退回 IORegistry 的 `BatteryPercent` 属性（macOS 15 之前） | IOHIDManager（只覆盖蓝牙 HID 设备，AirPods 靠定时刷新） |
 
 荣源方案键盘（VID `0x3151`，如腹灵 NX87、Akko、MonsGeek、Epomaker…）系统读不到电量，通过厂商 HID 通道发送只读命令 `GET_BATTERY (0x83)` 获取，三个平台都支持。只有系统读不到电量的设备，才会去尝试厂商协议。
 

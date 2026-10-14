@@ -4,6 +4,9 @@ _version: 1
 
 app.name: "Bluetooth Battery"
 
+# %{name} is the AirPods' own name, as the system reports it
+device.case: "%{name} Case"
+
 menu.refresh: "Refresh now"
 menu.autostart: "Launch at login"
 menu.quit: "Quit"

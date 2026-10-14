@@ -54,6 +54,8 @@ fn pixels(size: usize, level: Option<u8>, charging: bool, kind: DeviceKind, styl
             DeviceKind::Keyboard => keyboard,
             DeviceKind::Mouse => mouse,
             DeviceKind::Headphones => headphones,
+            DeviceKind::Earbuds => earbuds,
+            DeviceKind::EarbudsCase => earbuds_case,
             DeviceKind::Gamepad => gamepad,
             DeviceKind::Phone => phone,
             DeviceKind::Other => bluetooth_rune,
@@ -200,6 +202,25 @@ fn headphones(x: f32, y: f32) -> bool {
     band || cups
 }
 
+/// Two stemmed buds side by side, seen from the front
+fn earbuds(x: f32, y: f32) -> bool {
+    [-1.0f32, 1.0].into_iter().any(|side| {
+        let x = x * side;
+        circle(x, y, -4.2, -3.0, 3.1) || round_rect(x, y, -5.4, -3.0, -3.0, 7.0, 1.2)
+    })
+}
+
+/// The buds' charging case: a clamshell with the lid seam near the top and the status LED below it
+fn earbuds_case(x: f32, y: f32) -> bool {
+    if !round_rect(x, y, -7.5, -5.0, 7.5, 6.5, 2.6) {
+        return false;
+    }
+    // Cutouts: lid seam + status LED
+    let seam = rect(x, y, -7.5, -1.9, 7.5, -1.0);
+    let led = circle(x, y, 0.0, 3.0, 1.1);
+    !(seam || led)
+}
+
 fn gamepad(x: f32, y: f32) -> bool {
     let body = round_rect(x, y, -8.5, -4.5, 8.5, 2.5, 3.0)
         || circle(x, y, -5.2, 2.8, 3.2)
@@ -241,6 +262,8 @@ mod tests {
             ("kb75", Some(75), false, DeviceKind::Keyboard),
             ("mouse75", Some(75), false, DeviceKind::Mouse),
             ("hp15", Some(15), false, DeviceKind::Headphones),
+            ("buds80", Some(80), false, DeviceKind::Earbuds),
+            ("buds_case61", Some(61), false, DeviceKind::EarbudsCase),
             ("pad100", Some(100), false, DeviceKind::Gamepad),
             ("phone46", Some(46), false, DeviceKind::Phone),
             ("other55", Some(55), false, DeviceKind::Other),

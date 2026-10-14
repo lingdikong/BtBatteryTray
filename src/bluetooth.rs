@@ -5,6 +5,10 @@ pub enum DeviceKind {
     Keyboard,
     Mouse,
     Headphones,
+    /// In-ear buds with a stem, reported per side and with a charging case of their own (AirPods and the like)
+    Earbuds,
+    /// The earbuds' charging case, which macOS tracks as a battery of its own
+    EarbudsCase,
     Gamepad,
     Phone,
     Other,
@@ -52,7 +56,7 @@ pub struct BtDevice {
     /// Bluetooth address as 12 uppercase hex digits, used to match the vendor HID channel
     pub address: String,
     pub battery: Option<u8>,
-    /// Can only be true when the system reports charging state (currently only Linux power_supply)
+    /// Can only be true when the system reports charging state (Linux power_supply, macOS accessory power sources)
     pub charging: bool,
 }
 

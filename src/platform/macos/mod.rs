@@ -2,6 +2,7 @@ pub mod autostart;
 pub mod bluetooth;
 pub mod devwatch;
 pub mod hid;
+mod powersource;
 mod registry;
 
 use std::time::Duration;

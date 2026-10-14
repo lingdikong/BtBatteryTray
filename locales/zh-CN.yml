@@ -3,6 +3,8 @@ _version: 1
 
 app.name: "蓝牙电量"
 
+device.case: "%{name} 充电盒"
+
 menu.refresh: "立即刷新"
 menu.autostart: "开机自启"
 menu.quit: "退出"

@@ -11,7 +11,7 @@ use core_foundation::dictionary::CFMutableDictionaryRef;
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
 
-use super::bluetooth::HidBattery;
+use super::bluetooth::BatteryReading;
 use crate::bluetooth::normalize_address;
 
 type IoObject = u32;
@@ -38,8 +38,8 @@ unsafe extern "C" {
 }
 
 /// Battery levels of all HID services that publish `BatteryPercent`
-pub fn batteries() -> Vec<HidBattery> {
-    let mut out: Vec<HidBattery> = Vec::new();
+pub fn batteries() -> Vec<BatteryReading> {
+    let mut out: Vec<BatteryReading> = Vec::new();
     for class in [c"AppleDeviceManagementHIDEventService", c"IOHIDDevice"] {
         for entry in services(class) {
             let Some(level) = own_property(entry, "BatteryPercent").and_then(|v| v.downcast::<CFNumber>()?.to_i64())
@@ -56,7 +56,7 @@ pub fn batteries() -> Vec<HidBattery> {
             if out.iter().any(|b| b.product == product && b.ids == ids) {
                 continue;
             }
-            out.push(HidBattery { product, ids, level: level.clamp(0, 100) as u8 });
+            out.push(BatteryReading { product, ids, level: level.clamp(0, 100) as u8, charging: false });
         }
     }
     out
