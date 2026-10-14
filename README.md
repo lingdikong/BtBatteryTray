@@ -172,3 +172,7 @@ The tag must match `version` in `Cargo.toml` (`v0.1.6` ↔ `0.1.6`); otherwise t
 - `packaging/macos/`: `Info.plist` template and localized app names (`*.lproj/InfoPlist.strings`)
 - `packaging/linux/`: `.desktop` file, udev rule and `install.sh`
 - `scripts/`: `build-installer.ps1`, `build-macos.sh`, `build-linux.sh`, `make_ico.py`
+
+## License
+
+[MIT](LICENSE) © Konglingdi

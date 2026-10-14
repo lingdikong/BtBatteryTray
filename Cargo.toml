@@ -5,6 +5,7 @@ edition = "2024"
 # let-chains (`if let ... && let ...`) need 1.88
 rust-version = "1.88"
 description = "Tray app showing the battery level of connected Bluetooth devices"
+license = "MIT"
 
 [profile.release]
 lto = true

@@ -172,3 +172,7 @@ git push origin main v0.1.6
 - `packaging/macos/`：`Info.plist` 模板和各语言应用名（`*.lproj/InfoPlist.strings`）
 - `packaging/linux/`：`.desktop` 文件、udev 规则和 `install.sh`
 - `scripts/`：`build-installer.ps1`、`build-macos.sh`、`build-linux.sh`、`make_ico.py`
+
+## 许可证
+
+[MIT](LICENSE) © Konglingdi
