@@ -12,7 +12,7 @@
 |---|---|---|
 | Windows | 设备属性 `DEVPKEY_Bluetooth_Battery`（BLE 电池服务、HFP 耳机）；iPhone 等双模设备从同一 ContainerId 的 BLE 节点取 | WinRT DeviceWatcher |
 | Linux | BlueZ `org.bluez.Battery1`；没有时用内核 `/sys/class/power_supply`（Logitech HID++ 等，还能拿到充电状态） | BlueZ D-Bus 信号 |
-| macOS | `system_profiler SPBluetoothDataType`（Apple 设备、AirPods、多数 BLE 设备） | IOHIDManager（只覆盖蓝牙 HID 设备，AirPods 靠定时刷新） |
+| macOS | `system_profiler SPBluetoothDataType`（Apple 设备、AirPods、多数 BLE 设备）；没有时读 IORegistry 的 `BatteryPercent` 属性（如罗技鼠标） | IOHIDManager（只覆盖蓝牙 HID 设备，AirPods 靠定时刷新） |
 
 荣源方案键盘（VID `0x3151`，如腹灵 NX87、Akko、MonsGeek、Epomaker…）系统读不到电量，通过厂商 HID 通道发送只读命令 `GET_BATTERY (0x83)` 获取，三个平台都支持。只有系统读不到电量的设备，才会去尝试厂商协议。
 

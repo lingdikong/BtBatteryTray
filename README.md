@@ -12,7 +12,7 @@ No vendor drivers or background services needed; it is a single executable.
 |---|---|---|
 | Windows | Device property `DEVPKEY_Bluetooth_Battery` (BLE Battery Service, HFP headsets); dual-mode devices such as iPhones use the BLE node with the same ContainerId | WinRT DeviceWatcher |
 | Linux | BlueZ `org.bluez.Battery1`; otherwise the kernel's `/sys/class/power_supply` (Logitech HID++ etc., which also reports charging) | BlueZ D-Bus signals |
-| macOS | `system_profiler SPBluetoothDataType` (Apple devices, AirPods, most BLE devices) | IOHIDManager (Bluetooth HID devices only; AirPods rely on periodic refresh) |
+| macOS | `system_profiler SPBluetoothDataType` (Apple devices, AirPods, most BLE devices); otherwise the IORegistry `BatteryPercent` property (e.g. Logitech mice) | IOHIDManager (Bluetooth HID devices only; AirPods rely on periodic refresh) |
 
 Keyboards built on the RongYuan platform (VID `0x3151`, e.g. Feker NX87, Akko, MonsGeek, Epomaker...) don't report their battery to the OS. The app reads it over the vendor HID channel with the read-only command `GET_BATTERY (0x83)`, on all three platforms. The vendor protocol is only tried for devices the OS has no battery level for.
 
