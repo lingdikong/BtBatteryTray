@@ -1,6 +1,6 @@
 [package]
 name = "bt-battery-tray"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 # let-chains (`if let ... && let ...`) need 1.88
 rust-version = "1.88"
