@@ -5,9 +5,12 @@ pub enum DeviceKind {
     Keyboard,
     Mouse,
     Headphones,
-    /// In-ear buds with a stem, reported per side and with a charging case of their own (AirPods and the like)
+    /// In-ear buds with a stem, reported per side and with a charging case of their own (AirPods and the like).
+    /// Only macOS tells these apart from headphones; Windows and Linux report them as `Headphones`
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Earbuds,
-    /// The earbuds' charging case, which macOS tracks as a battery of its own
+    /// The earbuds' charging case, which only macOS tracks as a battery of its own
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     EarbudsCase,
     Gamepad,
     Phone,
