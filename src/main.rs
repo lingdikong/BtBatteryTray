@@ -160,14 +160,25 @@ fn spawn_worker(results: Sender<Vec<Entry>>, trigger_rx: Receiver<Trigger>) {
     });
 }
 
+/// A device's tray icon. On macOS it outlives the device's connection: when the device goes away the
+/// `NSStatusItem` is hidden rather than destroyed, so it keeps its place in the menu bar (see
+/// `platform::set_icon_visible`). Elsewhere a hidden icon is dropped right away, which removes it.
+struct DeviceIcon {
+    /// Entry::key of the device the icon belongs to
+    key: String,
+    tray: TrayIcon,
+    /// Whether the icon is currently on the tray
+    shown: bool,
+}
+
 struct App {
     menu: Menu,
     device_items: Vec<MenuItem>,
     refresh: MenuItem,
     autostart: CheckMenuItem,
     quit: MenuItem,
-    /// One tray icon per connected device (shown in "disconnected" style when no battery level), keyed by Entry::key
-    icons: Vec<(String, TrayIcon)>,
+    /// One tray icon per connected device (shown in "disconnected" style when no battery level)
+    icons: Vec<DeviceIcon>,
     /// Placeholder icon when no device is connected, so the menu can still be opened
     placeholder: Option<TrayIcon>,
     entries: Option<Vec<Entry>>,
@@ -247,6 +258,10 @@ impl App {
             // Linux StatusNotifierItem remembers the icon's show / hide setting by id
             .with_id(format!("bt-battery-{key}"))
             .with_guid(icon_guid(key))
+            // macOS saves where the user ⌘-dragged an icon under this name; without one AppKit numbers the icons
+            // by creation order (Item-0, Item-1...), which isn't stable here since icons come and go with the
+            // devices, so two icons could come back holding each other's positions
+            .with_autosave_name(format!("com.lingdikong.btbatterytray.{key}"))
             .with_icon(self.render(level, charging, kind))
             .with_tooltip(tip)
             .with_menu(Box::new(self.menu.clone()))
@@ -258,29 +273,51 @@ impl App {
     fn update(&mut self, entries: Vec<Entry>) {
         // Redraw after a theme change even if the data hasn't changed
         let light_theme = platform::light_theme();
-        // If creating an icon failed last time, retry even if the data hasn't changed
-        let all_icons_present = entries.len() == self.icons.len();
-        if self.entries.as_ref() == Some(&entries) && self.light_theme == light_theme && all_icons_present {
+        // If creating or showing an icon failed last time, retry even if the data hasn't changed.
+        // The system is asked rather than our own `shown`, so an icon it stopped showing is rebuilt instead of
+        // staying missing until the app is restarted
+        let all_icons_shown = entries
+            .iter()
+            .all(|e| self.icons.iter().any(|i| i.key == e.key && i.shown && platform::icon_is_visible(&i.tray)));
+        if self.entries.as_ref() == Some(&entries) && self.light_theme == light_theme && all_icons_shown {
             return;
         }
         self.light_theme = light_theme;
         self.update_menu(&entries);
         self.seen_battery.extend(entries.iter().filter(|e| e.level.is_some()).map(|e| e.key.clone()));
 
-        // Remove icons of disconnected devices (dropping a TrayIcon removes it from the tray)
-        self.icons.retain(|(key, _)| entries.iter().any(|e| &e.key == key));
+        // Take the icons of disconnected devices off the tray
+        for icon in self.icons.iter_mut().filter(|i| !entries.iter().any(|e| e.key == i.key)) {
+            icon.shown = false;
+            platform::set_icon_visible(&icon.tray, false);
+        }
+        if !platform::KEEP_HIDDEN_ICONS {
+            // Dropping a TrayIcon removes it from the tray
+            self.icons.retain(|i| i.shown);
+        }
         for e in &entries {
             // Tray tooltips are limited to 127 characters
             let tip: String = format!("{}\n{}", e.name, e.status()).chars().take(127).collect();
-            if let Some((_, tray)) = self.icons.iter().find(|(key, _)| key == &e.key) {
-                let _ = tray.set_icon(Some(self.render(e.level, e.charging, e.kind)));
-                let _ = tray.set_tooltip(Some(tip));
-            } else if let Ok(tray) = self.build_icon(&e.key, e.level, e.charging, e.kind, &tip) {
-                self.icons.push((e.key.clone(), tray));
+            let image = self.render(e.level, e.charging, e.kind);
+            match self.icons.iter().position(|i| i.key == e.key) {
+                Some(i) => {
+                    let icon = &mut self.icons[i];
+                    let _ = icon.tray.set_icon(Some(image));
+                    let _ = icon.tray.set_tooltip(Some(tip));
+                    icon.shown = true;
+                    // Reassert it on every refresh: an icon AppKit stopped drawing comes back on its own
+                    // instead of staying missing until the app is restarted
+                    platform::set_icon_visible(&icon.tray, true);
+                }
+                None => {
+                    if let Ok(tray) = self.build_icon(&e.key, e.level, e.charging, e.kind, &tip) {
+                        self.icons.push(DeviceIcon { key: e.key.clone(), tray, shown: true });
+                    }
+                }
             }
         }
 
-        if self.icons.is_empty() {
+        if self.icons.iter().all(|i| !i.shown) {
             let tip = &*t!("tray.no_devices");
             match &self.placeholder {
                 Some(tray) => {
@@ -308,10 +345,10 @@ impl App {
             if level > icon::LOW_BATTERY || self.low_notified.contains(&e.key) {
                 continue;
             }
-            if let Some((_, tray)) = self.icons.iter().find(|(key, _)| key == &e.key) {
+            if let Some(icon) = self.icons.iter().find(|i| i.key == e.key) {
                 let body = t!("notify.low.body", name = e.name, level = level);
                 // If it wasn't sent (e.g. Explorer is restarting), try again on the next refresh
-                if platform::notify(tray, icon_guid(&e.key), &t!("notify.low.title"), &body) {
+                if platform::notify(&icon.tray, icon_guid(&e.key), &t!("notify.low.title"), &body) {
                     self.low_notified.insert(e.key.clone());
                 }
             }

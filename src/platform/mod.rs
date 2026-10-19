@@ -8,7 +8,9 @@
 //! - `light_theme()`: whether the taskbar / menu bar uses a light theme
 //! - `idle_time()`: time since the last keyboard/mouse input (None if unavailable)
 //! - `notify(tray, guid, title, body)`: shows a system notification (low battery alert), returns whether it was sent
-//! - `ICON_SIZE`, `MENU_SEPARATOR`
+//! - `set_icon_visible(tray, visible)`: shows / hides a tray icon without destroying it (macOS only, elsewhere a no-op)
+//! - `icon_is_visible(tray)`: whether the system is showing the icon (always true where icons can't be hidden)
+//! - `ICON_SIZE`, `MENU_SEPARATOR`, `KEEP_HIDDEN_ICONS`
 
 #[cfg(windows)]
 mod windows;

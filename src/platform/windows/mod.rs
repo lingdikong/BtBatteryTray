@@ -14,6 +14,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub const ICON_SIZE: usize = 32;
 /// Separator between device name and battery level in the menu: Windows menus right-align text after `\t`
 pub const MENU_SEPARATOR: &str = "\t";
+/// Icons of disconnected devices are removed by dropping them, see `set_icon_visible`
+pub const KEEP_HIDDEN_ICONS: bool = false;
+
+/// No-op: only macOS keeps the icons of disconnected devices alive
+pub fn set_icon_visible(_tray: &tray_icon::TrayIcon, _visible: bool) {}
+
+/// An icon that exists is on the tray here, there is nothing to ask the system
+pub fn icon_is_visible(_tray: &tray_icon::TrayIcon) -> bool {
+    true
+}
 
 /// Tray-related initialization (not needed on Windows)
 pub fn init() {}

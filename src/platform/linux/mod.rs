@@ -9,6 +9,16 @@ use std::time::Duration;
 pub const ICON_SIZE: usize = 32;
 /// Separator between device name and battery level in the menu (dbusmenu doesn't right-align on `\t`)
 pub const MENU_SEPARATOR: &str = "  ";
+/// Icons of disconnected devices are removed by dropping them, see `set_icon_visible`
+pub const KEEP_HIDDEN_ICONS: bool = false;
+
+/// No-op: only macOS keeps the icons of disconnected devices alive
+pub fn set_icon_visible(_tray: &tray_icon::TrayIcon, _visible: bool) {}
+
+/// An icon that exists is on the tray here, there is nothing to ask the system
+pub fn icon_is_visible(_tray: &tray_icon::TrayIcon) -> bool {
+    true
+}
 
 /// tray-icon's ksni backend runs D-Bus on its own thread, so no init is needed
 pub fn init() {}
